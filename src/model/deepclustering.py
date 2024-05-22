@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytorch_lightning as pl
 import torch
-from sklearn.cluster import KMeans, MiniBatchKMeans
+from sklearn.cluster import KMeans
 from torch import optim
 import torch.nn.functional as F
 
@@ -46,10 +46,8 @@ class DeepClustering(pl.LightningModule):
     def init_clusters(self, loader):
         with torch.no_grad():
             z = torch.vstack([self.autoencoder.encode(batch) for batch in loader]).detach().cpu().numpy()
-        kmeans_ = KMeans(n_clusters=self.hparams.n_clusters, n_init=20, random_state=self.hparams.random_state)
-        self.kmeans_ = MiniBatchKMeans(n_clusters=self.hparams.n_clusters, init=kmeans_.fit(z).cluster_centers_,
-                                       random_state=self.hparams.random_state).fit(z)
-        self.cluster_centers_ = torch.FloatTensor(self.kmeans_.cluster_centers_)
+        kmeans = KMeans(n_clusters=self.hparams.n_clusters, n_init=20, random_state=self.hparams.random_state)
+        self.cluster_centers_ = torch.FloatTensor(kmeans.fit(z).cluster_centers_)
 
 
     def predict_cluster_from_embedding(self, z):
@@ -60,7 +58,12 @@ class DeepClustering(pl.LightningModule):
 
 
     def update_cluster(self, z, cluster_idx):
-        pass
+        n_samples = len(z)
+        for i in range(n_samples):
+            self.count[cluster_idx] += 1
+            eta = 1.0 / self.count[cluster_idx]
+            updated_cluster = ((1 - eta) * self.cluster_centers_[cluster_idx].to(z.device) + eta * z[i])
+            self.cluster_centers_[cluster_idx] = updated_cluster.to(self.cluster_centers_.device)
 
 
     def configure_optimizers(self):
@@ -70,9 +73,12 @@ class DeepClustering(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         z = self.autoencoder.encode(batch)
-        self.kmeans_.partial_fit(z.detach().cpu().numpy())
-        self.cluster_centers_ = torch.FloatTensor(self.kmeans_.cluster_centers_)
-        cluster_id = self.kmeans_.predict(z.detach().cpu().numpy())
+        cluster_id = self.predict_cluster_from_embedding(z)
+        elem_count = torch.bincount(cluster_id, minlength= self.hparams.n_clusters)
+        for k in range(self.hparams.n_clusters):
+            if elem_count[k] == 0:
+                continue
+            self.update_cluster(z[cluster_id == k], k)
 
         au_loss, au_individual_loss, dist_loss = self._loss(batch=batch, z=z, cluster_id=cluster_id)
         loss_dict = {f"train_au_loss_{idx}": view_loss for idx,view_loss in enumerate(au_individual_loss)}
@@ -86,7 +92,12 @@ class DeepClustering(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         z = self.autoencoder.encode(batch)
-        cluster_id = self.kmeans_.predict(z.detach().cpu().numpy())
+        cluster_id = self.predict_cluster_from_embedding(z)
+        elem_count = torch.bincount(cluster_id, minlength= self.hparams.n_clusters)
+        for k in range(self.hparams.n_clusters):
+            if elem_count[k] == 0:
+                continue
+            self.update_cluster(z[cluster_id == k], k)
 
         au_loss, au_individual_loss, dist_loss = self._loss(batch=batch, z=z, cluster_id=cluster_id)
         loss_dict = {f"val_au_loss_{idx}": view_loss for idx,view_loss in enumerate(au_individual_loss)}
@@ -99,7 +110,12 @@ class DeepClustering(pl.LightningModule):
 
     def test_step(self, batch, batch_idx):
         z = self.autoencoder.encode(batch)
-        cluster_id = self.kmeans_.predict(z.detach().cpu().numpy())
+        cluster_id = self.predict_cluster_from_embedding(z)
+        elem_count = torch.bincount(cluster_id, minlength= self.hparams.n_clusters)
+        for k in range(self.hparams.n_clusters):
+            if elem_count[k] == 0:
+                continue
+            self.update_cluster(z[cluster_id == k], k)
 
         au_loss, au_individual_loss, dist_loss = self._loss(batch=batch, z=z, cluster_id=cluster_id)
         loss_dict = {f"test_au_loss_{idx}": view_loss for idx,view_loss in enumerate(au_individual_loss)}
@@ -113,8 +129,8 @@ class DeepClustering(pl.LightningModule):
     def predict_step(self, batch, batch_idx = None):
         z = self.forward(batch)
         m = 2
-        dis_mat = self.kmeans_.transform(z.to(self.cluster_centers_.device))
-        # dis_mat = torch.stack(dis_mat).transpose(0, 1)
+        dis_mat = [torch.sum(torch.nn.functional.mse_loss(z, cluster_center.repeat(len(z), 1), reduction='none'), dim = 1) for cluster_center in self.cluster_centers_.to(z.device)]
+        dis_mat = torch.stack(dis_mat).transpose(0, 1)
         inv_weight = dis_mat**(2/(m-1))*torch.repeat_interleave(((1./dis_mat)**(2/(m-1))).sum(1).reshape(-1,1), self.hparams.n_clusters, 1)
         prob = 1./inv_weight
         return prob

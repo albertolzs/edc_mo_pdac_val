@@ -24,7 +24,7 @@ from src.utils import MultiViewDataset
 
 class Optimization:
 
-    def objective(self, trial, Xs, samples,
+    def objective(self, trial, Xs, samples, pipelines,
                   num_layers_option: list = [1, 2, 1], num_units_option: list = [2, 10, 2], n_epochs_option= [20,100,20],
                   lambda_option: list = [0., 1., 0.25], n_clusters_option: list = [2, 5, 1], batch_size: int = 32,
                   latent_space_option: list = [50, 150, 50],
@@ -41,7 +41,7 @@ class Optimization:
                 units_in_layer = units_in_view[layer]
                 current_units = units_in_layer//divisor_units
                 if current_units*len(num_features) < latent_space:
-                    raise optuna.TrialPruned("hidden space <<<< latent_space").add_note("hidden space <<<< latent_space")
+                    raise optuna.TrialPruned("hidden space <<<< latent_space")
                 units_in_view.append(current_units)
             num_units.append(units_in_view)
 
@@ -79,7 +79,7 @@ class Optimization:
             samples_train= pd.concat(Xs_provtrain, axis= 1).index
             results_step = Parallel(n_jobs=n_jobs)(delayed(self._step)(Xs_provtrain=Xs_provtrain, Xs_provtest=Xs_provtest,
                                                                        samples_train=samples_train, train_index=train_index,
-                                                                       val_index=val_index,
+                                                                       val_index=val_index, pipelines=pipelines,
                                                                        batch_size=batch_size, in_channels_list=in_channels_list,
                                                                        hidden_channels_list=hidden_channels_list,
                                                                        latent_space=latent_space,
@@ -114,7 +114,7 @@ class Optimization:
             optimal_lr = [i['optimal_lr'] for i in results_step]
 
             if (np.mean(val_loss) >= 1) or (np.mean(cl_val_au_loss) >= 1):
-                raise optuna.TrialPruned("val_loss > 1").add_note("val_loss > 1")
+                raise optuna.TrialPruned("val_loss > 1")
 
             train_loss_list.extend(train_loss)
             train_loss_view_list.extend(train_loss_view)
@@ -191,16 +191,21 @@ class Optimization:
         return np.mean(val_silhscore_list)
 
 
-    def _step(self, Xs_provtrain, Xs_provtest, samples_train, train_index, val_index, batch_size,
+    def _step(self, Xs_provtrain, Xs_provtest, samples_train, train_index, val_index, pipelines, batch_size,
               in_channels_list, hidden_channels_list, n_clusters, n_epochs, lambda_coeff, latent_space):
 
         train_loc, val_loc = samples_train[train_index], samples_train[val_index]
         Xs_train = [X.loc[train_loc] for X in Xs_provtrain]
         Xs_val = [X.loc[val_loc] for X in Xs_provtrain]
 
+        pipelines = [pipeline.fit(X) for pipeline, X in zip(pipelines, Xs_train)]
+        Xs_train = [pipeline.transform(X) for pipeline,X in zip(pipelines, Xs_train)]
+        Xs_val = [pipeline.transform(X) for pipeline,X in zip(pipelines, Xs_val)]
+        Xs_test = [pipeline.transform(X) for pipeline,X in zip(pipelines, Xs_provtest)]
+
         training_data = MultiViewDataset(Xs=Xs_train)
         validation_data = MultiViewDataset(Xs=Xs_val)
-        testing_data = MultiViewDataset(Xs=Xs_provtest)
+        testing_data = MultiViewDataset(Xs=Xs_test)
         train_dataloader = DataLoader(dataset=training_data, batch_size=batch_size, shuffle=True)
         val_dataloader = DataLoader(dataset=validation_data, batch_size=batch_size, shuffle=False)
         test_dataloader = DataLoader(dataset=testing_data, batch_size=batch_size, shuffle=False)
@@ -266,7 +271,7 @@ class Optimization:
         cl_train_loss, cl_val_loss, cl_test_loss = cl_train_loss[0], cl_val_loss[0], cl_test_loss[0]
 
         if len(train_pred.unique()) == 1:
-            raise optuna.TrialPruned("len(train_pred.unique()) == 1").add_note("len(train_pred.unique()) == 1")
+            raise optuna.TrialPruned("len(train_pred.unique()) == 1")
 
         train_silhscore = silhouette_score(z_train, train_pred)
         val_silhscore = silhouette_score(z_val, val_pred) if len(val_pred.unique()) > 1 else 0
