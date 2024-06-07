@@ -1,10 +1,10 @@
-from shap.explainers._gradient import Gradient, _PyTorchGradient
-from shap.explainers._deep import Deep, PyTorchDeep
+from shap.explainers._gradient import GradientExplainer, _PyTorchGradient
+from shap.explainers._deep import DeepExplainer, PyTorchDeep
 import torch
 from shap.explainers._deep.deep_pytorch import add_interim_values, deeplift_grad
 import numpy as np
 
-class GradientV2(Gradient):
+class GradientV2(GradientExplainer):
 
     def __init__(self, model, data, session=None, batch_size=64, local_smoothing=0):
         if type(model) is tuple:
@@ -111,7 +111,7 @@ class _PyTorchGradientV2(_PyTorchGradient):
         return grads
 
 
-class DeepV2(Deep):
+class DeepV2(DeepExplainer):
     """ Meant to approximate SHAP values for deep learning models.
 
     This is an enhanced version of the DeepLIFT algorithm (Deep SHAP) where, similar to Kernel SHAP, we

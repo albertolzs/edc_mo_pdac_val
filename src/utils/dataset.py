@@ -6,7 +6,8 @@ from torch.utils.data import Dataset
 class MultiViewDataset(Dataset):
     def __init__(self, Xs):
         self.data = Xs
-        self.samples = pd.Index(set(sum([X.index.to_list() for X in Xs], [])))
+        # self.samples = pd.Index(set(sum([X.index.to_list() for X in Xs], [])))
+        self.samples = Xs[0].index
 
 
     def __len__(self):
